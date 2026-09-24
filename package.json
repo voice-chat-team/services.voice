@@ -22,7 +22,7 @@
     "@nestjs/microservices": "^11.1.28",
     "@nestjs/platform-express": "^11.0.1",
     "@voice-chat/common": "^1.0.19",
-    "@voice-chat/contracts": "^1.0.48",
+    "@voice-chat/contracts": "^1.0.49",
     "axios": "^1.18.1",
     "cross-env": "^10.1.0",
     "livekit-server-sdk": "^2.14.0",
