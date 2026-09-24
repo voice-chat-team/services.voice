@@ -32,7 +32,6 @@ export class VoiceService {
     request: JoinVoiceChannelRequest,
   ): Promise<JoinVoiceChannelResponse> {
     const { userId, guildId, channelId } = request;
-
     await this._checkVoiceChannel(guildId, channelId);
     await this._checkMember(guildId, userId);
 
