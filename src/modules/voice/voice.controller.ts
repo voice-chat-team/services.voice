@@ -7,7 +7,7 @@ import type {
   HandleLiveKitWebhookResponse,
   JoinVoiceChannelRequest,
   JoinVoiceChannelResponse,
-} from '@voice-chat/contracts/gen/voice';
+} from '@voice-chat/contracts/gen/ts/voice';
 import { VoiceService } from './voice.service';
 
 @Controller()

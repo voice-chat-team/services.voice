@@ -52,11 +52,14 @@ export class LiveKitService {
    * Имя комнаты = id голосового канала, identity участника = id пользователя.
    * guildId кладётся в metadata, чтобы вебхук мог определить, в какой
    * Centrifugo-канал публиковать событие, не ходя лишний раз в services.guilds.
+   * canPublish = право VOICE_SPEAK: без него участник только слушает. Право
+   * зашито в токен, поэтому изменение роли действует со следующего входа.
    */
   async createJoinToken(
     userId: string,
     guildId: string,
     channelId: string,
+    canPublish: boolean,
   ): Promise<string> {
     const metadata: JoinTokenMetadata = { guildId };
 
@@ -69,7 +72,7 @@ export class LiveKitService {
     token.addGrant({
       roomJoin: true,
       room: channelId,
-      canPublish: true,
+      canPublish,
       canSubscribe: true,
       canPublishData: true,
     });

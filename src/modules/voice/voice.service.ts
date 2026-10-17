@@ -1,14 +1,19 @@
 import { Injectable } from '@nestjs/common';
 import { RpcException } from '@nestjs/microservices';
-import { RpcStatus } from '@voice-chat/common';
-import { ChannelType } from '@voice-chat/contracts/dist/constants';
+import {
+  assertGuildMember,
+  assertGuildPermission,
+  hasGuildPermission,
+  RpcStatus,
+} from '@voice-chat/common';
+import { ChannelType, Permission } from '@voice-chat/contracts';
 import type {
   GetGuildVoiceParticipantsRequest,
   HandleLiveKitWebhookRequest,
   JoinVoiceChannelRequest,
   JoinVoiceChannelResponse,
   VoiceParticipant,
-} from '@voice-chat/contracts/gen/voice';
+} from '@voice-chat/contracts/gen/ts/voice';
 import type { ParticipantInfo, WebhookEvent } from 'livekit-server-sdk';
 import { CentrifugoService } from 'src/infrastructure/centrifugo/centrifugo.service';
 import {
@@ -33,13 +38,20 @@ export class VoiceService {
   ): Promise<JoinVoiceChannelResponse> {
     const { userId, guildId, channelId } = request;
     await this._checkVoiceChannel(guildId, channelId);
-    await this._checkMember(guildId, userId);
+    const member = await this._checkMember(guildId, userId);
+
+    assertGuildPermission(
+      member,
+      Permission.VOICE_CONNECT,
+      'У вас нет права подключаться к голосовым каналам на этом сервере',
+    );
 
     try {
       const token = await this.liveKitClient.createJoinToken(
         userId,
         guildId,
         channelId,
+        hasGuildPermission(member, Permission.VOICE_SPEAK),
       );
 
       return { token, url: this.liveKitClient.wsUrl, room: channelId };
@@ -169,12 +181,7 @@ export class VoiceService {
       userId,
     });
 
-    if (!memberInfo || memberInfo.isBanned) {
-      throw new RpcException({
-        code: RpcStatus.PERMISSION_DENIED,
-        details: 'Вы не являетесь участником сервера',
-      });
-    }
+    assertGuildMember(memberInfo);
 
     return memberInfo;
   }
