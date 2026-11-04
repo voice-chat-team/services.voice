@@ -12,7 +12,7 @@ import {
  * Токен нужен клиенту только в момент room.connect(), дальше соединение
  * живёт само по себе — поэтому TTL намеренно короткий.
  */
-const JOIN_TOKEN_TTL = '10m';
+const JOIN_TOKEN_TTL = '30s';
 
 export interface JoinTokenMetadata {
   guildId: string;
@@ -42,6 +42,25 @@ export class LiveKitService {
       this._API_SECRET,
     );
     this.webhookReceiver = new WebhookReceiver(this._API_KEY, this._API_SECRET);
+  }
+
+  async listParticipantsStrict(room: string): Promise<ParticipantInfo[]> {
+    try {
+      return await this.roomService.listParticipants(room);
+    } catch (error) {
+      if (
+        (error as { status?: number }).status === 404 ||
+        (error as { code?: string }).code === 'not_found'
+      )
+        return [];
+      throw error;
+    }
+  }
+  listRooms() {
+    return this.roomService.listRooms();
+  }
+  removeParticipant(room: string, identity: string) {
+    return this.roomService.removeParticipant(room, identity);
   }
 
   get wsUrl(): string {

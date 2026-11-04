@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { RpcException } from '@nestjs/microservices';
 import {
   assertGuildMember,
@@ -26,7 +26,59 @@ export const VOICE_PARTICIPANT_JOINED = 'VOICE_PARTICIPANT_JOINED';
 export const VOICE_PARTICIPANT_LEFT = 'VOICE_PARTICIPANT_LEFT';
 
 @Injectable()
-export class VoiceService {
+export class VoiceService implements OnModuleInit, OnModuleDestroy {
+  private reconcileTimer?: ReturnType<typeof setInterval>;
+  private reconciling = false;
+
+  onModuleInit() {
+    this.reconcileTimer = setInterval(() => {
+      void this.reconcileRooms();
+    }, 2000);
+    this.reconcileTimer.unref();
+  }
+
+  onModuleDestroy() {
+    clearInterval(this.reconcileTimer);
+  }
+
+  private async reconcileRooms() {
+    if (this.reconciling) return;
+    this.reconciling = true;
+    try {
+      const { channels } = await this.guildClient.call(
+        'getReservedVoiceChannels',
+        {},
+      );
+      for (const channel of channels) {
+        try {
+          const room = { name: channel.id };
+          const participants = await this.liveKitClient.listParticipantsStrict(
+            room.name,
+          );
+          const guildId = channel.guildId;
+          const { userIds } = await this.guildClient.call('syncVoiceSlots', {
+            guildId,
+            channelId: room.name,
+            userIds: participants.map((p) => p.identity),
+          });
+          for (const participant of participants) {
+            if (!userIds.includes(participant.identity))
+              await this.liveKitClient.removeParticipant(
+                room.name,
+                participant.identity,
+              );
+          }
+        } catch (error) {
+          console.error('Voice room reconciliation failed', channel.id, error);
+        }
+      }
+    } catch (error) {
+      console.error('Voice access reconciliation failed', error);
+    } finally {
+      this.reconciling = false;
+    }
+  }
+
   constructor(
     private readonly guildClient: GuildClientGrpc,
     private readonly liveKitClient: LiveKitService,
@@ -46,6 +98,11 @@ export class VoiceService {
       'У вас нет права подключаться к голосовым каналам на этом сервере',
     );
 
+    await this.guildClient.call('reserveVoiceSlot', {
+      guildId,
+      channelId,
+      userId,
+    });
     try {
       const token = await this.liveKitClient.createJoinToken(
         userId,
@@ -77,6 +134,7 @@ export class VoiceService {
 
     const { channels } = await this.guildClient.call('getGuildChannels', {
       guildId,
+      userId,
     });
 
     const voiceChannelIds = channels
@@ -137,6 +195,8 @@ export class VoiceService {
       );
       return true;
     }
+
+    await this._checkVoiceChannel(guildId, channelId);
 
     const type =
       event.event === 'participant_joined'
