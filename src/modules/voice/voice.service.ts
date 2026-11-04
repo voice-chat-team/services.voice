@@ -89,7 +89,7 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     request: JoinVoiceChannelRequest,
   ): Promise<JoinVoiceChannelResponse> {
     const { userId, guildId, channelId } = request;
-    await this._checkVoiceChannel(guildId, channelId);
+    const channel = await this._checkVoiceChannel(guildId, channelId);
     const member = await this._checkMember(guildId, userId);
 
     assertGuildPermission(
@@ -98,6 +98,23 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
       'У вас нет права подключаться к голосовым каналам на этом сервере',
     );
 
+    const participants =
+      await this.liveKitClient.listParticipantsStrict(channelId);
+    const otherUserIds = new Set(
+      participants.map((p) => p.identity).filter((id) => id !== userId),
+    );
+    if (channel.capacity > 0 && otherUserIds.size >= channel.capacity) {
+      throw new RpcException({
+        code: RpcStatus.RESOURCE_EXHAUSTED,
+        details: 'Голосовой канал заполнен',
+      });
+    }
+    await this.guildClient.call('syncVoiceSlots', {
+      guildId,
+      channelId,
+      userIds: participants.map((p) => p.identity),
+    });
+    // This transaction still arbitrates simultaneous requests for the last seat.
     await this.guildClient.call('reserveVoiceSlot', {
       guildId,
       channelId,
