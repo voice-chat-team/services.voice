@@ -33,7 +33,7 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
   onModuleInit() {
     this.reconcileTimer = setInterval(() => {
       void this.reconcileRooms();
-    }, 2000);
+    }, 10_000);
     this.reconcileTimer.unref();
   }
 
@@ -44,32 +44,46 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
   private async reconcileRooms() {
     if (this.reconciling) return;
     this.reconciling = true;
+
     try {
-      const { channels } = await this.guildClient.call(
-        'getReservedVoiceChannels',
-        {},
-      );
-      for (const channel of channels) {
+      const rooms = await this.liveKitClient.listRooms();
+
+      for (const room of rooms) {
         try {
-          const room = { name: channel.id };
           const participants = await this.liveKitClient.listParticipantsStrict(
             room.name,
           );
-          const guildId = channel.guildId;
-          const { userIds } = await this.guildClient.call('syncVoiceSlots', {
+          const guildId =
+            this._readRoomGuildId(room.metadata) ??
+            participants.map((p) => this._readGuildId(p)).find(Boolean);
+
+          if (!guildId) continue;
+
+          const { channels } = await this.guildClient.call('getGuildChannels', {
             guildId,
-            channelId: room.name,
-            userIds: participants.map((p) => p.identity),
           });
+
+          const channel = channels.find(
+            (c) => c.id === room.name && Number(c.type) === ChannelType.VOICE,
+          );
+
+          const allowed = channel
+            ? await this._allowedVoiceUserIds(
+                guildId,
+                room.name,
+                participants.map((p) => p.identity),
+              )
+            : new Set<string>();
+
           for (const participant of participants) {
-            if (!userIds.includes(participant.identity))
+            if (!allowed.has(participant.identity))
               await this.liveKitClient.removeParticipant(
                 room.name,
                 participant.identity,
               );
           }
         } catch (error) {
-          console.error('Voice room reconciliation failed', channel.id, error);
+          console.error('Voice room reconciliation failed', room.name, error);
         }
       }
     } catch (error) {
@@ -98,34 +112,44 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
       'У вас нет права подключаться к голосовым каналам на этом сервере',
     );
 
+    const { userIds } = await this.guildClient.call('getChannelRecipients', {
+      guildId,
+      channelId,
+    });
+    if (!userIds.includes(userId)) {
+      throw new RpcException({
+        code: RpcStatus.PERMISSION_DENIED,
+        details: 'Нет доступа к голосовому каналу',
+      });
+    }
+
+    const room = await this.liveKitClient.ensureRoom(
+      guildId,
+      channelId,
+      channel.capacity,
+    );
     const participants =
       await this.liveKitClient.listParticipantsStrict(channelId);
-    const otherUserIds = new Set(
-      participants.map((p) => p.identity).filter((id) => id !== userId),
-    );
-    if (channel.capacity > 0 && otherUserIds.size >= channel.capacity) {
+    const alreadyJoined = participants.some((p) => p.identity === userId);
+
+    if (
+      room.maxParticipants > 0 &&
+      !alreadyJoined &&
+      participants.length >= room.maxParticipants
+    ) {
       throw new RpcException({
         code: RpcStatus.RESOURCE_EXHAUSTED,
         details: 'Голосовой канал заполнен',
       });
     }
-    await this.guildClient.call('syncVoiceSlots', {
-      guildId,
-      channelId,
-      userIds: participants.map((p) => p.identity),
-    });
-    // This transaction still arbitrates simultaneous requests for the last seat.
-    await this.guildClient.call('reserveVoiceSlot', {
-      guildId,
-      channelId,
-      userId,
-    });
+
     try {
       const token = await this.liveKitClient.createJoinToken(
         userId,
         guildId,
         channelId,
         hasGuildPermission(member, Permission.VOICE_SPEAK),
+        channel.capacity,
       );
 
       return { token, url: this.liveKitClient.wsUrl, room: channelId };
@@ -261,6 +285,48 @@ export class VoiceService implements OnModuleInit, OnModuleDestroy {
     assertGuildMember(memberInfo);
 
     return memberInfo;
+  }
+
+  private async _allowedVoiceUserIds(
+    guildId: string,
+    channelId: string,
+    userIds: string[],
+  ) {
+    const { userIds: recipients } = await this.guildClient.call(
+      'getChannelRecipients',
+      { guildId, channelId },
+    );
+    const admitted = new Set(recipients);
+    const allowed = new Set<string>();
+    for (const userId of userIds) {
+      if (!admitted.has(userId)) continue;
+      try {
+        const member = await this._checkMember(guildId, userId);
+        if (hasGuildPermission(member, Permission.VOICE_CONNECT))
+          allowed.add(userId);
+      } catch (error) {
+        if (!(error instanceof RpcException)) throw error;
+        const detail = error.getError();
+        const code =
+          typeof detail === 'object' && detail
+            ? (detail as { code?: number }).code
+            : undefined;
+        if (
+          code !== RpcStatus.PERMISSION_DENIED &&
+          code !== RpcStatus.NOT_FOUND
+        )
+          throw error;
+      }
+    }
+    return allowed;
+  }
+
+  private _readRoomGuildId(metadata: string): string | null {
+    try {
+      return (JSON.parse(metadata) as JoinTokenMetadata).guildId ?? null;
+    } catch {
+      return null;
+    }
   }
 
   private _readGuildId(participant: ParticipantInfo): string | null {

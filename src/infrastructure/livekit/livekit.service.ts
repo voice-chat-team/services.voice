@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   AccessToken,
+  RoomConfiguration,
   RoomServiceClient,
   WebhookReceiver,
   type ParticipantInfo,
@@ -44,6 +45,14 @@ export class LiveKitService {
     this.webhookReceiver = new WebhookReceiver(this._API_KEY, this._API_SECRET);
   }
 
+  ensureRoom(guildId: string, channelId: string, capacity: number) {
+    return this.roomService.createRoom({
+      name: channelId,
+      maxParticipants: capacity,
+      metadata: JSON.stringify({ guildId }),
+    });
+  }
+
   async listParticipantsStrict(room: string): Promise<ParticipantInfo[]> {
     try {
       return await this.roomService.listParticipants(room);
@@ -79,6 +88,7 @@ export class LiveKitService {
     guildId: string,
     channelId: string,
     canPublish: boolean,
+    capacity: number,
   ): Promise<string> {
     const metadata: JoinTokenMetadata = { guildId };
 
@@ -88,6 +98,13 @@ export class LiveKitService {
       metadata: JSON.stringify(metadata),
     });
 
+    // The room may expire between token issuance and use. Preserve the limit
+    // when LiveKit auto-creates it from this token as well.
+    token.roomConfig = new RoomConfiguration({
+      name: channelId,
+      maxParticipants: capacity,
+      metadata: JSON.stringify(metadata),
+    });
     token.addGrant({
       roomJoin: true,
       room: channelId,
